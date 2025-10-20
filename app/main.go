@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"unicode/utf8"
 )
 
 // Ensures gofmt doesn't remove the "bytes" import above (feel free to remove this!)
@@ -15,18 +14,18 @@ var _ = bytes.ContainsAny
 func main() {
 	if len(os.Args) < 3 || os.Args[1] != "-E" {
 		fmt.Fprintf(os.Stderr, "usage: mygrep -E <pattern>\n")
-		os.Exit(2) // 1 means no lines were selected, >1 means error
+		os.Exit(2)
 	}
 
 	pattern := os.Args[2]
 
-	line, err := io.ReadAll(os.Stdin) // assume we're only dealing with a single line
+	line, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: read input text: %v\n", err)
 		os.Exit(2)
 	}
 
-	ok, err := matchLine(line, pattern)
+	ok, err := matchPattern(string(line), pattern)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
@@ -35,68 +34,228 @@ func main() {
 	if !ok {
 		os.Exit(1)
 	}
-
-	// default exit code is 0 which means success
 }
 
-func matchLine(line []byte, pattern string) (bool, error) {
-	// Handle \d - digit character class
-	if pattern == "\\d" {
-		for _, b := range line {
-			if b >= '0' && b <= '9' {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-
-	// Handle \w - word character class
-	if pattern == "\\w" {
-		for _, b := range line {
-			if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-
-	// Handle positive character groups [abc]
-	if len(pattern) > 2 && pattern[0] == '[' && pattern[len(pattern)-1] == ']' {
-		chars := pattern[1 : len(pattern)-1]
-		
-		// Check if it's a negative character group [^abc]
-		if len(chars) > 0 && chars[0] == '^' {
-			negativeChars := chars[1:]
-			for _, b := range line {
-				found := false
-				for i := 0; i < len(negativeChars); i++ {
-					if b == negativeChars[i] {
-						found = true
-						break
-					}
-				}
-				if !found {
+func matchPattern(text, pattern string) (bool, error) {
+	// Handle alternation (cat|dog)
+	if len(pattern) > 0 && pattern[0] == '(' {
+		end := findClosingParen(pattern)
+		if end > 0 && end < len(pattern) {
+			inside := pattern[1:end]
+			rest := pattern[end+1:]
+			
+			alternatives := splitAlternation(inside)
+			for _, alt := range alternatives {
+				fullPattern := alt + rest
+				if match, _ := matchPattern(text, fullPattern); match {
 					return true, nil
 				}
 			}
 			return false, nil
 		}
-		
-		// Positive character group
-		for _, b := range line {
-			for i := 0; i < len(chars); i++ {
-				if b == chars[i] {
-					return true, nil
-				}
+	}
+
+	startAnchor := false
+	endAnchor := false
+	
+	if len(pattern) > 0 && pattern[0] == '^' {
+		startAnchor = true
+		pattern = pattern[1:]
+	}
+	
+	if len(pattern) > 0 && pattern[len(pattern)-1] == '$' {
+		endAnchor = true
+		pattern = pattern[:len(pattern)-1]
+	}
+	
+	if startAnchor && endAnchor {
+		return matchHere(text, pattern, 0) == len(text), nil
+	}
+	
+	if startAnchor {
+		matched := matchHere(text, pattern, 0)
+		return matched >= 0, nil
+	}
+	
+	if endAnchor {
+		for i := 0; i <= len(text); i++ {
+			matched := matchHere(text, pattern, i)
+			if matched == len(text) {
+				return true, nil
 			}
 		}
 		return false, nil
 	}
-
-	// Handle single literal character
-	if utf8.RuneCountInString(pattern) != 1 {
-		return false, fmt.Errorf("unsupported pattern: %q", pattern)
+	
+	for i := 0; i <= len(text); i++ {
+		if matchHere(text, pattern, i) >= 0 {
+			return true, nil
+		}
 	}
-
-	return bytes.ContainsAny(line, pattern), nil
+	
+	return false, nil
 }
+
+func matchHere(text, pattern string, textPos int) int {
+	patPos := 0
+	
+	for patPos < len(pattern) {
+		if patPos+1 < len(pattern) && pattern[patPos+1] == '+' {
+			elem := pattern[patPos : patPos+1]
+			patPos += 2
+			
+			count := 0
+			for textPos < len(text) && matchElement(text[textPos], elem) {
+				textPos++
+				count++
+			}
+			
+			if count == 0 {
+				return -1
+			}
+		} else if patPos+1 < len(pattern) && pattern[patPos+1] == '?' {
+			elem := pattern[patPos : patPos+1]
+			patPos += 2
+			
+			if textPos < len(text) && matchElement(text[textPos], elem) {
+				textPos++
+			}
+		} else if pattern[patPos] == '\\' && patPos+1 < len(pattern) {
+			ch := pattern[patPos+1]
+			if ch == 'd' {
+				if textPos >= len(text) || text[textPos] < '0' || text[textPos] > '9' {
+					return -1
+				}
+				textPos++
+				patPos += 2
+			} else if ch == 'w' {
+				if textPos >= len(text) {
+					return -1
+				}
+				b := text[textPos]
+				if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_') {
+					return -1
+				}
+				textPos++
+				patPos += 2
+			} else {
+				return -1
+			}
+		} else if pattern[patPos] == '[' {
+			end := patPos + 1
+			for end < len(pattern) && pattern[end] != ']' {
+				end++
+			}
+			if end >= len(pattern) {
+				return -1
+			}
+			
+			group := pattern[patPos+1 : end]
+			if textPos >= len(text) {
+				return -1
+			}
+			
+			if !matchCharGroup(text[textPos], group) {
+				return -1
+			}
+			
+			textPos++
+			patPos = end + 1
+		} else if pattern[patPos] == '.' {
+			if textPos >= len(text) {
+				return -1
+			}
+			textPos++
+			patPos++
+		} else {
+			if textPos >= len(text) || text[textPos] != pattern[patPos] {
+				return -1
+			}
+			textPos++
+			patPos++
+		}
+	}
+	
+	return textPos
+}
+
+func matchElement(char byte, elem string) bool {
+	if elem == "." {
+		return true
+	}
+	if elem == "\\d" {
+		return char >= '0' && char <= '9'
+	}
+	if elem == "\\w" {
+		return (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_'
+	}
+	if len(elem) > 0 && elem[0] == '[' && elem[len(elem)-1] == ']' {
+		return matchCharGroup(char, elem[1:len(elem)-1])
+	}
+	if len(elem) == 1 {
+		return char == elem[0]
+	}
+	return false
+}
+
+func matchCharGroup(char byte, group string) bool {
+	if len(group) > 0 && group[0] == '^' {
+		negGroup := group[1:]
+		for i := 0; i < len(negGroup); i++ {
+			if char == negGroup[i] {
+				return false
+			}
+		}
+		return true
+	}
+	
+	for i := 0; i < len(group); i++ {
+		if char == group[i] {
+			return true
+		}
+	}
+	return false
+}
+
+func findClosingParen(s string) int {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '(' {
+			depth++
+		} else if s[i] == ')' {
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func splitAlternation(s string) []string {
+	var result []string
+	var current string
+	depth := 0
+	
+	for i := 0; i < len(s); i++ {
+		if s[i] == '(' {
+			depth++
+			current += string(s[i])
+		} else if s[i] == ')' {
+			depth--
+			current += string(s[i])
+		} else if s[i] == '|' && depth == 0 {
+			result = append(result, current)
+			current = ""
+		} else {
+			current += string(s[i])
+		}
+	}
+	
+	if current != "" {
+		result = append(result, current)
+	}
+	
+	return result
+}
+
