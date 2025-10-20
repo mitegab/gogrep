@@ -100,6 +100,24 @@ func matchHere(text, pattern string, textPos int) int {
 	patPos := 0
 	
 	for patPos < len(pattern) {
+		// Handle alternation (cat|dog)
+		if pattern[patPos] == '(' {
+			end := findClosingParenAt(pattern, patPos)
+			if end > patPos {
+				inside := pattern[patPos+1 : end]
+				restPattern := pattern[end+1:]
+				
+				alternatives := splitAlternation(inside)
+				for _, alt := range alternatives {
+					result := matchHere(text, alt+restPattern, textPos)
+					if result >= 0 {
+						return result
+					}
+				}
+				return -1
+			}
+		}
+		
 		// Check for quantifiers (+, ?)
 		elemLen := 0
 		var elem string
@@ -114,6 +132,12 @@ func matchHere(text, pattern string, textPos int) int {
 				end++
 			}
 			if end < len(pattern) {
+				elemLen = end - patPos + 1
+				elem = pattern[patPos : end+1]
+			}
+		} else if pattern[patPos] == '(' {
+			end := findClosingParenAt(pattern, patPos)
+			if end > patPos {
 				elemLen = end - patPos + 1
 				elem = pattern[patPos : end+1]
 			}
@@ -269,6 +293,24 @@ func matchCharGroup(char byte, group string) bool {
 func findClosingParen(s string) int {
 	depth := 0
 	for i := 0; i < len(s); i++ {
+		if s[i] == '(' {
+			depth++
+		} else if s[i] == ')' {
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func findClosingParenAt(s string, start int) int {
+	if start >= len(s) || s[start] != '(' {
+		return -1
+	}
+	depth := 0
+	for i := start; i < len(s); i++ {
 		if s[i] == '(' {
 			depth++
 		} else if s[i] == ')' {
