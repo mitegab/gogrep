@@ -127,23 +127,48 @@ func matchHere(text, pattern string, textPos int) int {
 		
 		// Check if there's a quantifier after the element
 		if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '+' {
-			patPos += elemLen + 1
+			restPattern := pattern[patPos+elemLen+1:]
 			
-			count := 0
+			// Count how many times the element matches (greedy)
+			matchCount := 0
+			savedPos := textPos
 			for textPos < len(text) && matchElement(text[textPos], elem) {
 				textPos++
-				count++
+				matchCount++
 			}
 			
-			if count == 0 {
+			if matchCount == 0 {
 				return -1
 			}
-		} else if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '?' {
-			patPos += elemLen + 1
 			
-			if textPos < len(text) && matchElement(text[textPos], elem) {
-				textPos++
+			// Try matching with backtracking from max matches down to 1
+			for textPos >= savedPos+1 {
+				result := matchHere(text, restPattern, textPos)
+				if result >= 0 {
+					return result
+				}
+				textPos--
 			}
+			
+			return -1
+		} else if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '?' {
+			restPattern := pattern[patPos+elemLen+1:]
+			
+			// Try with the element matched first
+			if textPos < len(text) && matchElement(text[textPos], elem) {
+				result := matchHere(text, restPattern, textPos+1)
+				if result >= 0 {
+					return result
+				}
+			}
+			
+			// Try without matching the element
+			result := matchHere(text, restPattern, textPos)
+			if result >= 0 {
+				return result
+			}
+			
+			return -1
 		} else if pattern[patPos] == '\\' && patPos+1 < len(pattern) {
 			ch := pattern[patPos+1]
 			if ch == 'd' {
