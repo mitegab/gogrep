@@ -100,9 +100,34 @@ func matchHere(text, pattern string, textPos int) int {
 	patPos := 0
 	
 	for patPos < len(pattern) {
-		if patPos+1 < len(pattern) && pattern[patPos+1] == '+' {
-			elem := pattern[patPos : patPos+1]
-			patPos += 2
+		// Check for quantifiers (+, ?)
+		elemLen := 0
+		var elem string
+		
+		// Determine the element before the quantifier
+		if pattern[patPos] == '\\' && patPos+1 < len(pattern) {
+			elemLen = 2
+			elem = pattern[patPos : patPos+2]
+		} else if pattern[patPos] == '[' {
+			end := patPos + 1
+			for end < len(pattern) && pattern[end] != ']' {
+				end++
+			}
+			if end < len(pattern) {
+				elemLen = end - patPos + 1
+				elem = pattern[patPos : end+1]
+			}
+		} else if pattern[patPos] == '.' {
+			elemLen = 1
+			elem = "."
+		} else {
+			elemLen = 1
+			elem = pattern[patPos : patPos+1]
+		}
+		
+		// Check if there's a quantifier after the element
+		if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '+' {
+			patPos += elemLen + 1
 			
 			count := 0
 			for textPos < len(text) && matchElement(text[textPos], elem) {
@@ -113,9 +138,8 @@ func matchHere(text, pattern string, textPos int) int {
 			if count == 0 {
 				return -1
 			}
-		} else if patPos+1 < len(pattern) && pattern[patPos+1] == '?' {
-			elem := pattern[patPos : patPos+1]
-			patPos += 2
+		} else if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '?' {
+			patPos += elemLen + 1
 			
 			if textPos < len(text) && matchElement(text[textPos], elem) {
 				textPos++
