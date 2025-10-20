@@ -40,17 +40,63 @@ func main() {
 }
 
 func matchLine(line []byte, pattern string) (bool, error) {
+	// Handle \d - digit character class
+	if pattern == "\\d" {
+		for _, b := range line {
+			if b >= '0' && b <= '9' {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	// Handle \w - word character class
+	if pattern == "\\w" {
+		for _, b := range line {
+			if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	// Handle positive character groups [abc]
+	if len(pattern) > 2 && pattern[0] == '[' && pattern[len(pattern)-1] == ']' {
+		chars := pattern[1 : len(pattern)-1]
+		
+		// Check if it's a negative character group [^abc]
+		if len(chars) > 0 && chars[0] == '^' {
+			negativeChars := chars[1:]
+			for _, b := range line {
+				found := false
+				for i := 0; i < len(negativeChars); i++ {
+					if b == negativeChars[i] {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+		
+		// Positive character group
+		for _, b := range line {
+			for i := 0; i < len(chars); i++ {
+				if b == chars[i] {
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	}
+
+	// Handle single literal character
 	if utf8.RuneCountInString(pattern) != 1 {
 		return false, fmt.Errorf("unsupported pattern: %q", pattern)
 	}
 
-	var ok bool
-
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
-
-	// Uncomment this to pass the first stage
-	ok = bytes.ContainsAny(line, pattern)
-
-	return ok, nil
+	return bytes.ContainsAny(line, pattern), nil
 }
