@@ -45,6 +45,7 @@ func matchPattern(text, pattern string) (bool, error) {
 		pattern = pattern[1:]
 	}
 	if len(pattern) > 0 && pattern[len(pattern)-1] == '$' {
+		
 		endAnchor = true
 		pattern = pattern[:len(pattern)-1]
 	}
