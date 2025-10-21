@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -13,23 +14,57 @@ var _ = bytes.ContainsAny
 
 // Usage: echo <input_text> | your_program.sh -E <pattern>
 //        or: your_program.sh -E <pattern> <filename>
+//        or: your_program.sh -r -E <pattern> <directory>
 // Supports nested backreferences: groups numbered by opening paren position
 func main() {
-	if len(os.Args) < 3 || os.Args[1] != "-E" {
-		fmt.Fprintf(os.Stderr, "usage: mygrep -E <pattern> [filename]\n")
+	// Parse flags
+	recursive := false
+	argIdx := 1
+	
+	// Check for -r flag
+	if len(os.Args) > 1 && os.Args[1] == "-r" {
+		recursive = true
+		argIdx = 2
+	}
+	
+	if len(os.Args) < argIdx+2 || os.Args[argIdx] != "-E" {
+		fmt.Fprintf(os.Stderr, "usage: mygrep [-r] -E <pattern> [filename|directory]\n")
 		os.Exit(2)
 	}
 
-	pattern := os.Args[2]
+	pattern := os.Args[argIdx+1]
 
-	// Check if we have file arguments
-	if len(os.Args) >= 4 {
-		// File mode: process one or more files
-		filenames := os.Args[3:]
+	// Check if we have file/directory arguments
+	if len(os.Args) >= argIdx+3 {
+		paths := os.Args[argIdx+2:]
 		foundMatch := false
-		multipleFiles := len(filenames) > 1
 		
-		for _, filename := range filenames {
+		// If recursive mode, collect all files from directories
+		var filesToProcess []string
+		if recursive {
+			for _, path := range paths {
+				err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+					// Only process regular files
+					if !info.IsDir() {
+						filesToProcess = append(filesToProcess, filePath)
+					}
+					return nil
+				})
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error: walking directory %s: %v\n", path, err)
+					os.Exit(2)
+				}
+			}
+		} else {
+			filesToProcess = paths
+		}
+		
+		multipleFiles := len(filesToProcess) > 1 || recursive
+		
+		for _, filename := range filesToProcess {
 			content, err := os.ReadFile(filename)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: read file %s: %v\n", filename, err)
