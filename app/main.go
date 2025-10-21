@@ -189,11 +189,40 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 			// Check for quantifiers after the group
 			var rest string
 			quantifier := ""
+			repeatCount := 0
 			if end+1 < len(pattern) {
 				ch := pattern[end+1]
 				if ch == '+' || ch == '?' || ch == '*' {
 					quantifier = string(ch)
 					rest = pattern[end+2:]
+				} else if ch == '{' {
+					// Parse {n}
+					closeBrace := end + 2
+					for closeBrace < len(pattern) && pattern[closeBrace] != '}' {
+						closeBrace++
+					}
+					if closeBrace < len(pattern) {
+						numStr := pattern[end+2 : closeBrace]
+						n := 0
+						valid := true
+						for _, c := range numStr {
+							if c >= '0' && c <= '9' {
+								n = n*10 + int(c-'0')
+							} else {
+								valid = false
+								break
+							}
+						}
+						if valid {
+							quantifier = "{n}"
+							repeatCount = n
+							rest = pattern[closeBrace+1:]
+						} else {
+							rest = pattern[end+1:]
+						}
+					} else {
+						rest = pattern[end+1:]
+					}
 				} else {
 					rest = pattern[end+1:]
 				}
@@ -272,6 +301,51 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 					}
 				}
 				return -1, caps, have, nextGroup
+			}
+			
+			// Handle {n} quantifier on groups
+			if quantifier == "{n}" {
+				// Match exactly repeatCount times
+				currentPos := textPos
+				lastCaps := caps
+				lastHave := have
+				lastNextGroup := nextGroup + 1
+				
+				for i := 0; i < repeatCount; i++ {
+					matched := false
+					if len(alts) > 1 {
+						// Try each alternation
+						for _, alt := range alts {
+							nc, nh := cloneCaps(lastCaps, lastHave)
+							if res, ic, ih, ng := matchHere(text, alt, currentPos, nc, nh, lastNextGroup); res >= 0 {
+								lastCaps = ic
+								lastHave = ih
+								lastNextGroup = ng
+								currentPos = res
+								matched = true
+								break
+							}
+						}
+					} else {
+						// Simple group
+						nc, nh := cloneCaps(lastCaps, lastHave)
+						if res, ic, ih, ng := matchHere(text, inside, currentPos, nc, nh, lastNextGroup); res >= 0 {
+							lastCaps = ic
+							lastHave = ih
+							lastNextGroup = ng
+							currentPos = res
+							matched = true
+						}
+					}
+					if !matched {
+						return -1, caps, have, nextGroup
+					}
+				}
+				
+				// Successfully matched exactly repeatCount times
+				lastCaps[groupNo] = text[textPos:currentPos]
+				lastHave[groupNo] = true
+				return matchHere(text, rest, currentPos, lastCaps, lastHave, lastNextGroup)
 			}
 			
 			if len(alts) > 1 {
