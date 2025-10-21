@@ -191,26 +191,38 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 			quantifier := ""
 			repeatCount := 0
 			minCount := 0
+			maxCount := 0
 			if end+1 < len(pattern) {
 				ch := pattern[end+1]
 				if ch == '+' || ch == '?' || ch == '*' {
 					quantifier = string(ch)
 					rest = pattern[end+2:]
 				} else if ch == '{' {
-					// Parse {n} or {n,}
+					// Parse {n}, {n,}, or {n,m}
 					closeBrace := end + 2
 					for closeBrace < len(pattern) && pattern[closeBrace] != '}' {
 						closeBrace++
 					}
 					if closeBrace < len(pattern) {
 						content := pattern[end+2 : closeBrace]
-						// Check for {n,} format
-						if len(content) > 0 && content[len(content)-1] == ',' {
-							// {n,} format - minimum repetition
-							numStr := content[:len(content)-1]
+						// Check for comma
+						commaPos := -1
+						for i, c := range content {
+							if c == ',' {
+								commaPos = i
+								break
+							}
+						}
+						
+						if commaPos >= 0 {
+							// Has comma: {n,} or {n,m}
+							numStr1 := content[:commaPos]
+							numStr2 := content[commaPos+1:]
+							
+							// Parse first number
 							n := 0
 							valid := true
-							for _, c := range numStr {
+							for _, c := range numStr1 {
 								if c >= '0' && c <= '9' {
 									n = n*10 + int(c-'0')
 								} else {
@@ -218,12 +230,33 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 									break
 								}
 							}
-							if valid {
+							
+							if !valid {
+								rest = pattern[end+1:]
+							} else if len(numStr2) == 0 {
+								// {n,} format - minimum repetition
 								quantifier = "{n,}"
 								minCount = n
 								rest = pattern[closeBrace+1:]
 							} else {
-								rest = pattern[end+1:]
+								// {n,m} format - range repetition
+								m := 0
+								for _, c := range numStr2 {
+									if c >= '0' && c <= '9' {
+										m = m*10 + int(c-'0')
+									} else {
+										valid = false
+										break
+									}
+								}
+								if valid {
+									quantifier = "{n,m}"
+									minCount = n
+									maxCount = m
+									rest = pattern[closeBrace+1:]
+								} else {
+									rest = pattern[end+1:]
+								}
 							}
 						} else {
 							// {n} format - exact repetition
@@ -472,6 +505,108 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 				return -1, caps, have, nextGroup
 			}
 			
+			// Handle {n,m} quantifier on groups (range repetition)
+			if quantifier == "{n,m}" {
+				// Match between minCount and maxCount times
+				lastCaps, lastHave := cloneCaps(caps, have)
+				lastNextGroup := nextGroup
+				currentPos := textPos
+				
+				// First, match minimum required times
+				for i := 0; i < minCount; i++ {
+					matched := false
+					if len(alts) > 1 {
+						for _, alt := range alts {
+							nc, nh := cloneCaps(lastCaps, lastHave)
+							if res, ic, ih, ng := matchHere(text, alt, currentPos, nc, nh, lastNextGroup+1); res >= 0 {
+								lastCaps = ic
+								lastHave = ih
+								lastNextGroup = ng
+								currentPos = res
+								matched = true
+								break
+							}
+						}
+					} else {
+						nc, nh := cloneCaps(lastCaps, lastHave)
+						if res, ic, ih, ng := matchHere(text, inside, currentPos, nc, nh, lastNextGroup+1); res >= 0 {
+							lastCaps = ic
+							lastHave = ih
+							lastNextGroup = ng
+							currentPos = res
+							matched = true
+						}
+					}
+					if !matched {
+						// Couldn't match minimum required times
+						return -1, caps, have, nextGroup
+					}
+				}
+				
+				// Now match greedily up to maxCount, with backtracking
+				positions := []int{currentPos}
+				capStates := []map[int]string{lastCaps}
+				haveStates := []map[int]bool{lastHave}
+				groupStates := []int{lastNextGroup}
+				
+				matchCount := minCount
+				for matchCount < maxCount && currentPos < len(text) {
+					matched := false
+					if len(alts) > 1 {
+						for _, alt := range alts {
+							nc, nh := cloneCaps(lastCaps, lastHave)
+							if res, ic, ih, ng := matchHere(text, alt, currentPos, nc, nh, lastNextGroup+1); res >= 0 {
+								lastCaps = ic
+								lastHave = ih
+								lastNextGroup = ng
+								currentPos = res
+								positions = append(positions, currentPos)
+								capStates = append(capStates, lastCaps)
+								haveStates = append(haveStates, lastHave)
+								groupStates = append(groupStates, lastNextGroup)
+								matchCount++
+								matched = true
+								break
+							}
+						}
+					} else {
+						nc, nh := cloneCaps(lastCaps, lastHave)
+						if res, ic, ih, ng := matchHere(text, inside, currentPos, nc, nh, lastNextGroup+1); res >= 0 {
+							lastCaps = ic
+							lastHave = ih
+							lastNextGroup = ng
+							currentPos = res
+							positions = append(positions, currentPos)
+							capStates = append(capStates, lastCaps)
+							haveStates = append(haveStates, lastHave)
+							groupStates = append(groupStates, lastNextGroup)
+							matchCount++
+							matched = true
+						}
+					}
+					if !matched {
+						break
+					}
+				}
+				
+				// Backtrack from greedy to minimum
+				for i := len(positions) - 1; i >= 0; i-- {
+					endPos := positions[i]
+					stateCaps := capStates[i]
+					stateHave := haveStates[i]
+					stateGroup := groupStates[i]
+					
+					nc, nh := cloneCaps(stateCaps, stateHave)
+					nc[groupNo] = text[textPos:endPos]
+					nh[groupNo] = true
+					
+					if res, ic, ih, ng := matchHere(text, rest, endPos, nc, nh, stateGroup); res >= 0 {
+						return res, ic, ih, ng
+					}
+				}
+				return -1, caps, have, nextGroup
+			}
+			
 			if len(alts) > 1 {
 				for _, alt := range alts {
 					nc, nh := cloneCaps(caps, have)
@@ -597,7 +732,7 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 			nc, nh := cloneCaps(caps, have)
 			return matchHere(text, rest, textPos, nc, nh, nextGroup)
 		}
-		// '{n}' or '{n,}' quantifier
+		// '{n}', '{n,}', or '{n,m}' quantifier
 		if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '{' {
 			// Find closing }
 			closeBrace := patPos + elemLen + 1
@@ -608,12 +743,23 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 				content := pattern[patPos+elemLen+1 : closeBrace]
 				rest := pattern[closeBrace+1:]
 				
-				// Check for {n,} format
-				if len(content) > 0 && content[len(content)-1] == ',' {
-					// {n,} format - minimum repetition
-					numStr := content[:len(content)-1]
+				// Check for comma
+				commaPos := -1
+				for i, c := range content {
+					if c == ',' {
+						commaPos = i
+						break
+					}
+				}
+				
+				if commaPos >= 0 {
+					// Has comma: {n,} or {n,m}
+					numStr1 := content[:commaPos]
+					numStr2 := content[commaPos+1:]
+					
+					// Parse first number
 					n := 0
-					for _, ch := range numStr {
+					for _, ch := range numStr1 {
 						if ch >= '0' && ch <= '9' {
 							n = n*10 + int(ch-'0')
 						} else {
@@ -622,28 +768,67 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 						}
 					}
 					
-					// Match at least n times
-					for i := 0; i < n; i++ {
-						if textPos >= len(text) || !matchElement(text[textPos], elem) {
-							return -1, caps, have, nextGroup
+					if len(numStr2) == 0 {
+						// {n,} format - minimum repetition
+						// Match at least n times
+						for i := 0; i < n; i++ {
+							if textPos >= len(text) || !matchElement(text[textPos], elem) {
+								return -1, caps, have, nextGroup
+							}
+							textPos++
 						}
-						textPos++
-					}
-					
-					// Now match greedily as many more as possible with backtracking
-					positions := []int{textPos}
-					for textPos < len(text) && matchElement(text[textPos], elem) {
-						textPos++
-						positions = append(positions, textPos)
-					}
-					
-					// Backtrack from greedy to minimum
-					for i := len(positions) - 1; i >= 0; i-- {
-						if res, ic, ih, ng := matchHere(text, rest, positions[i], caps, have, nextGroup); res >= 0 {
-							return res, ic, ih, ng
+						
+						// Now match greedily as many more as possible with backtracking
+						positions := []int{textPos}
+						for textPos < len(text) && matchElement(text[textPos], elem) {
+							textPos++
+							positions = append(positions, textPos)
 						}
+						
+						// Backtrack from greedy to minimum
+						for i := len(positions) - 1; i >= 0; i-- {
+							if res, ic, ih, ng := matchHere(text, rest, positions[i], caps, have, nextGroup); res >= 0 {
+								return res, ic, ih, ng
+							}
+						}
+						return -1, caps, have, nextGroup
+					} else {
+						// {n,m} format - range repetition
+						m := 0
+						for _, ch := range numStr2 {
+							if ch >= '0' && ch <= '9' {
+								m = m*10 + int(ch-'0')
+							} else {
+								// Invalid format, treat as literal
+								goto notQuantifier
+							}
+						}
+						
+						// Match at least n times
+						for i := 0; i < n; i++ {
+							if textPos >= len(text) || !matchElement(text[textPos], elem) {
+								return -1, caps, have, nextGroup
+							}
+							textPos++
+						}
+						
+						// Now match greedily up to m times with backtracking
+						positions := []int{textPos}
+						matchCount := n
+						for matchCount < m && textPos < len(text) && matchElement(text[textPos], elem) {
+							textPos++
+							positions = append(positions, textPos)
+							matchCount++
+						}
+						
+						// Backtrack from greedy to minimum
+						for i := len(positions) - 1; i >= 0; i-- {
+							if res, ic, ih, ng := matchHere(text, rest, positions[i], caps, have, nextGroup); res >= 0 {
+								return res, ic, ih, ng
+							}
+						}
+						return -1, caps, have, nextGroup
 					}
-					return -1, caps, have, nextGroup
 				} else {
 					// {n} format - exact repetition
 					n := 0
