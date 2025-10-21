@@ -11,6 +11,7 @@ import (
 var _ = bytes.ContainsAny
 
 // Usage: echo <input_text> | your_program.sh -E <pattern>
+// Supports nested backreferences: groups numbered by opening paren position
 func main() {
 	if len(os.Args) < 3 || os.Args[1] != "-E" {
 		fmt.Fprintf(os.Stderr, "usage: mygrep -E <pattern>\n")
