@@ -399,6 +399,38 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 			nc, nh := cloneCaps(caps, have)
 			return matchHere(text, rest, textPos, nc, nh, nextGroup)
 		}
+		// '{n}' quantifier (exact repetition)
+		if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '{' {
+			// Find closing }
+			closeBrace := patPos + elemLen + 1
+			for closeBrace < len(pattern) && pattern[closeBrace] != '}' {
+				closeBrace++
+			}
+			if closeBrace < len(pattern) {
+				// Parse the number
+				numStr := pattern[patPos+elemLen+1 : closeBrace]
+				n := 0
+				for _, ch := range numStr {
+					if ch >= '0' && ch <= '9' {
+						n = n*10 + int(ch-'0')
+					} else {
+						// Invalid format, treat as literal
+						goto notQuantifier
+					}
+				}
+				// Match exactly n times
+				rest := pattern[closeBrace+1:]
+				for i := 0; i < n; i++ {
+					if textPos >= len(text) || !matchElement(text[textPos], elem) {
+						return -1, caps, have, nextGroup
+					}
+					textPos++
+				}
+				// Matched exactly n times, continue with rest
+				return matchHere(text, rest, textPos, caps, have, nextGroup)
+			}
+		}
+	notQuantifier:
 
 		// consume single element
 		if elem == "\\d" {
