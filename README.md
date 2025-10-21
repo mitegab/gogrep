@@ -27,6 +27,18 @@ git push origin master
 
 Time to move on to the next stage!
 
+# Features Implemented
+
+This grep implementation includes:
+- Basic character matching and character classes (\d, \w, [abc], [^xyz])
+- Anchors (^, $)
+- Quantifiers (+, ?, *)
+- Wildcard (.)
+- Alternation (|)
+- Backreferences (\1-\9) with nested group support
+- File search (single, multiple, multi-line)
+- Recursive directory search (-r flag)
+
 # Stage 2 & beyond
 
 Note: This section is for stages 2 and beyond.
