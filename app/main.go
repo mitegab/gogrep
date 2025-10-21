@@ -11,22 +11,55 @@ import (
 var _ = bytes.ContainsAny
 
 // Usage: echo <input_text> | your_program.sh -E <pattern>
+//        or: your_program.sh -E <pattern> <filename>
 // Supports nested backreferences: groups numbered by opening paren position
 func main() {
 	if len(os.Args) < 3 || os.Args[1] != "-E" {
-		fmt.Fprintf(os.Stderr, "usage: mygrep -E <pattern>\n")
+		fmt.Fprintf(os.Stderr, "usage: mygrep -E <pattern> [filename]\n")
 		os.Exit(2)
 	}
 
 	pattern := os.Args[2]
 
-	line, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: read input text: %v\n", err)
-		os.Exit(2)
+	var input string
+	if len(os.Args) >= 4 {
+		// File mode: read from file
+		filename := os.Args[3]
+		content, err := os.ReadFile(filename)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: read file: %v\n", err)
+			os.Exit(2)
+		}
+		input = string(content)
+	} else {
+		// Stdin mode: read from stdin
+		line, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: read input text: %v\n", err)
+			os.Exit(2)
+		}
+		input = string(line)
 	}
 
-	ok, err := matchPattern(string(line), pattern)
+	// In file mode, match and print matching lines
+	if len(os.Args) >= 4 {
+		// For now, treat as single line (multi-line handled in later stages)
+		ok, err := matchPattern(input, pattern)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(2)
+		}
+		if ok {
+			// Print the matching line
+			fmt.Print(input)
+			os.Exit(0)
+		} else {
+			os.Exit(1)
+		}
+	}
+
+	// Stdin mode: just check for match
+	ok, err := matchPattern(input, pattern)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
@@ -175,7 +208,7 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 			elem = pattern[patPos : patPos+1]
 		}
 
-		// '+' quantifier
+		// '+' quantifier (one or more)
 		if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '+' {
 			rest := pattern[patPos+elemLen+1:]
 			saved := textPos
@@ -189,6 +222,23 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 				return -1, caps, have, nextGroup
 			}
 			for tp := textPos; tp >= saved+1; tp-- {
+				nc, nh := cloneCaps(caps, have)
+				if res, ncc, nhh, ng := matchHere(text, rest, tp, nc, nh, nextGroup); res >= 0 {
+					return res, ncc, nhh, ng
+				}
+			}
+			return -1, caps, have, nextGroup
+		}
+		// '*' quantifier (zero or more)
+		if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '*' {
+			rest := pattern[patPos+elemLen+1:]
+			saved := textPos
+			// consume greedily
+			for textPos < len(text) && matchElement(text[textPos], elem) {
+				textPos++
+			}
+			// backtrack from greedy match down to zero
+			for tp := textPos; tp >= saved; tp-- {
 				nc, nh := cloneCaps(caps, have)
 				if res, ncc, nhh, ng := matchHere(text, rest, tp, nc, nh, nextGroup); res >= 0 {
 					return res, ncc, nhh, ng
