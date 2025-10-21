@@ -99,17 +99,22 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 			inside := pattern[patPos+1 : end]
 			rest := pattern[end+1:]
 			alts := splitAlternation(inside)
+			// capturing group (numbered)
+			groupNo := nextGroup
 			if len(alts) > 1 {
 				for _, alt := range alts {
 					nc, nh := cloneCaps(caps, have)
-					if res, ncc, nhh, ng := matchHere(text, alt+rest, textPos, nc, nh, nextGroup); res >= 0 {
-						return res, ncc, nhh, ng
+					// inner groups start numbering from nextGroup+1
+					if res, ic, ih, ng := matchHere(text, alt, textPos, nc, nh, nextGroup+1); res >= 0 {
+						captured := text[textPos:res]
+						ic[groupNo] = captured
+						ih[groupNo] = true
+						return matchHere(text, rest, res, ic, ih, ng)
 					}
 				}
 				return -1, caps, have, nextGroup
 			}
-			// capturing group (numbered)
-			groupNo := nextGroup
+			// no alternation inside, simple capturing
 			// Clone state for inner matching to avoid leaking mutations across branches
 			nc, nh := cloneCaps(caps, have)
 			// First, match the inside with group numbers starting from nextGroup+1 (inner groups get subsequent numbers)
