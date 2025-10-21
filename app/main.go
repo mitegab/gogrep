@@ -185,10 +185,95 @@ func matchHere(text, pattern string, textPos int, caps map[int]string, have map[
 				return -1, caps, have, nextGroup
 			}
 			inside := pattern[patPos+1 : end]
-			rest := pattern[end+1:]
+			
+			// Check for quantifiers after the group
+			var rest string
+			quantifier := ""
+			if end+1 < len(pattern) {
+				ch := pattern[end+1]
+				if ch == '+' || ch == '?' || ch == '*' {
+					quantifier = string(ch)
+					rest = pattern[end+2:]
+				} else {
+					rest = pattern[end+1:]
+				}
+			} else {
+				rest = pattern[end+1:]
+			}
+			
 			alts := splitAlternation(inside)
 			// capturing group (numbered)
 			groupNo := nextGroup
+			
+			// Handle quantifiers on groups
+			if quantifier == "*" {
+				// zero or more times
+				// Try matching greedily first
+				saved := textPos
+				matches := 0
+				currentPos := textPos
+				var lastCaps map[int]string
+				var lastHave map[int]bool
+				var lastNextGroup int
+				
+				for {
+					matched := false
+					if len(alts) > 1 {
+						// Try each alternation
+						for _, alt := range alts {
+							nc, nh := cloneCaps(caps, have)
+							if res, ic, ih, ng := matchHere(text, alt, currentPos, nc, nh, nextGroup+1); res >= 0 {
+								lastCaps = ic
+								lastHave = ih
+								lastNextGroup = ng
+								lastCaps[groupNo] = text[saved:res] // capture the whole match
+								lastHave[groupNo] = true
+								currentPos = res
+								matches++
+								matched = true
+								break
+							}
+						}
+					} else {
+						// Simple group
+						nc, nh := cloneCaps(caps, have)
+						if res, ic, ih, ng := matchHere(text, inside, currentPos, nc, nh, nextGroup+1); res >= 0 {
+							lastCaps = ic
+							lastHave = ih
+							lastNextGroup = ng
+							lastCaps[groupNo] = text[saved:res]
+							lastHave[groupNo] = true
+							currentPos = res
+							matches++
+							matched = true
+						}
+					}
+					if !matched {
+						break
+					}
+				}
+				
+				// Backtrack from greedy match
+				if matches == 0 {
+					// Zero matches is ok for *
+					return matchHere(text, rest, saved, caps, have, nextGroup+1)
+				}
+				
+				// Try from currentPos down to saved
+				for tryPos := currentPos; tryPos >= saved; tryPos-- {
+					// Build capture state for this position
+					tc, th := cloneCaps(lastCaps, lastHave)
+					if tryPos > saved {
+						tc[groupNo] = text[saved:tryPos]
+						th[groupNo] = true
+					}
+					if restRes, icFinal, ihFinal, ngFinal := matchHere(text, rest, tryPos, tc, th, lastNextGroup); restRes >= 0 {
+						return restRes, icFinal, ihFinal, ngFinal
+					}
+				}
+				return -1, caps, have, nextGroup
+			}
+			
 			if len(alts) > 1 {
 				for _, alt := range alts {
 					nc, nh := cloneCaps(caps, have)
