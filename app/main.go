@@ -22,47 +22,44 @@ func main() {
 
 	pattern := os.Args[2]
 
-	var input string
+	// Check if we have file arguments
 	if len(os.Args) >= 4 {
-		// File mode: read from file
-		filename := os.Args[3]
-		content, err := os.ReadFile(filename)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: read file: %v\n", err)
-			os.Exit(2)
-		}
-		input = string(content)
-	} else {
-		// Stdin mode: read from stdin
-		line, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: read input text: %v\n", err)
-			os.Exit(2)
-		}
-		input = string(line)
-	}
-
-	// In file mode, match and print matching lines
-	if len(os.Args) >= 4 {
-		// Process file line by line
-		lines := strings.Split(input, "\n")
+		// File mode: process one or more files
+		filenames := os.Args[3:]
 		foundMatch := false
+		multipleFiles := len(filenames) > 1
 		
-		for i, line := range lines {
-			// Skip empty last line from trailing newline (common case)
-			if i == len(lines)-1 && line == "" {
-				continue
-			}
-			
-			ok, err := matchPattern(line, pattern)
+		for _, filename := range filenames {
+			content, err := os.ReadFile(filename)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				fmt.Fprintf(os.Stderr, "error: read file %s: %v\n", filename, err)
 				os.Exit(2)
 			}
 			
-			if ok {
-				fmt.Println(line)
-				foundMatch = true
+			// Process file line by line
+			lines := strings.Split(string(content), "\n")
+			
+			for i, line := range lines {
+				// Skip empty last line from trailing newline (common case)
+				if i == len(lines)-1 && line == "" {
+					continue
+				}
+				
+				ok, err := matchPattern(line, pattern)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					os.Exit(2)
+				}
+				
+				if ok {
+					// Print with filename prefix if multiple files
+					if multipleFiles {
+						fmt.Printf("%s:%s\n", filename, line)
+					} else {
+						fmt.Println(line)
+					}
+					foundMatch = true
+				}
 			}
 		}
 		
@@ -73,8 +70,15 @@ func main() {
 		}
 	}
 
+	// Stdin mode: read from stdin
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: read input text: %v\n", err)
+		os.Exit(2)
+	}
+
 	// Stdin mode: just check for match
-	ok, err := matchPattern(input, pattern)
+	ok, err := matchPattern(string(input), pattern)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
