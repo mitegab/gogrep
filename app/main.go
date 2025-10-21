@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // Ensures gofmt doesn't remove the "bytes" import above (feel free to remove this!)
@@ -43,15 +44,29 @@ func main() {
 
 	// In file mode, match and print matching lines
 	if len(os.Args) >= 4 {
-		// For now, treat as single line (multi-line handled in later stages)
-		ok, err := matchPattern(input, pattern)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(2)
+		// Process file line by line
+		lines := strings.Split(input, "\n")
+		foundMatch := false
+		
+		for i, line := range lines {
+			// Skip empty last line from trailing newline (common case)
+			if i == len(lines)-1 && line == "" {
+				continue
+			}
+			
+			ok, err := matchPattern(line, pattern)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(2)
+			}
+			
+			if ok {
+				fmt.Println(line)
+				foundMatch = true
+			}
 		}
-		if ok {
-			// Print the matching line
-			fmt.Print(input)
+		
+		if foundMatch {
 			os.Exit(0)
 		} else {
 			os.Exit(1)
