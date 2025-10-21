@@ -37,92 +37,74 @@ func main() {
 }
 
 func matchPattern(text, pattern string) (bool, error) {
-	// Handle alternation (cat|dog)
-	if len(pattern) > 0 && pattern[0] == '(' {
-		end := findClosingParen(pattern)
-		if end > 0 && end < len(pattern) {
-			inside := pattern[1:end]
-			rest := pattern[end+1:]
-			
-			alternatives := splitAlternation(inside)
-			for _, alt := range alternatives {
-				fullPattern := alt + rest
-				if match, _ := matchPattern(text, fullPattern); match {
-					return true, nil
-				}
-			}
-			return false, nil
-		}
-	}
-
+	// anchors
 	startAnchor := false
 	endAnchor := false
-	
 	if len(pattern) > 0 && pattern[0] == '^' {
 		startAnchor = true
 		pattern = pattern[1:]
 	}
-	
 	if len(pattern) > 0 && pattern[len(pattern)-1] == '$' {
 		endAnchor = true
 		pattern = pattern[:len(pattern)-1]
 	}
-	
+
 	if startAnchor && endAnchor {
-		return matchHere(text, pattern, 0) == len(text), nil
+		pos, _, _ := matchHere(text, pattern, 0, "", false)
+		return pos == len(text), nil
 	}
-	
 	if startAnchor {
-		matched := matchHere(text, pattern, 0)
-		return matched >= 0, nil
+		pos, _, _ := matchHere(text, pattern, 0, "", false)
+		return pos >= 0, nil
 	}
-	
 	if endAnchor {
 		for i := 0; i <= len(text); i++ {
-			matched := matchHere(text, pattern, i)
-			if matched == len(text) {
+			pos, _, _ := matchHere(text, pattern, i, "", false)
+			if pos == len(text) {
 				return true, nil
 			}
 		}
 		return false, nil
 	}
-	
 	for i := 0; i <= len(text); i++ {
-		if matchHere(text, pattern, i) >= 0 {
+		if pos, _, _ := matchHere(text, pattern, i, "", false); pos >= 0 {
 			return true, nil
 		}
 	}
-	
 	return false, nil
 }
 
-func matchHere(text, pattern string, textPos int) int {
+func matchHere(text, pattern string, textPos int, cap1 string, haveCap bool) (int, string, bool) {
 	patPos := 0
-	
 	for patPos < len(pattern) {
-		// Handle alternation (cat|dog)
+		// parentheses: alternation or capturing group
 		if pattern[patPos] == '(' {
 			end := findClosingParenAt(pattern, patPos)
-			if end > patPos {
-				inside := pattern[patPos+1 : end]
-				restPattern := pattern[end+1:]
-				
-				alternatives := splitAlternation(inside)
-				for _, alt := range alternatives {
-					result := matchHere(text, alt+restPattern, textPos)
-					if result >= 0 {
-						return result
+			if end < 0 {
+				return -1, cap1, haveCap
+			}
+			inside := pattern[patPos+1 : end]
+			rest := pattern[end+1:]
+			alts := splitAlternation(inside)
+			if len(alts) > 1 {
+				for _, alt := range alts {
+					if res, nc, nh := matchHere(text, alt+rest, textPos, cap1, haveCap); res >= 0 {
+						return res, nc, nh
 					}
 				}
-				return -1
+				return -1, cap1, haveCap
 			}
+			// capturing group (single)
+			if res, _, _ := matchHere(text, inside, textPos, cap1, haveCap); res >= 0 {
+				captured := text[textPos:res]
+				return matchHere(text, rest, res, captured, true)
+			}
+			return -1, cap1, haveCap
 		}
-		
-		// Check for quantifiers (+, ?)
+
+		// determine element and possible quantifier
 		elemLen := 0
-		var elem string
-		
-		// Determine the element before the quantifier
+		elem := ""
 		if pattern[patPos] == '\\' && patPos+1 < len(pattern) {
 			elemLen = 2
 			elem = pattern[patPos : patPos+2]
@@ -131,16 +113,11 @@ func matchHere(text, pattern string, textPos int) int {
 			for end < len(pattern) && pattern[end] != ']' {
 				end++
 			}
-			if end < len(pattern) {
-				elemLen = end - patPos + 1
-				elem = pattern[patPos : end+1]
+			if end >= len(pattern) {
+				return -1, cap1, haveCap
 			}
-		} else if pattern[patPos] == '(' {
-			end := findClosingParenAt(pattern, patPos)
-			if end > patPos {
-				elemLen = end - patPos + 1
-				elem = pattern[patPos : end+1]
-			}
+			elemLen = end - patPos + 1
+			elem = pattern[patPos : end+1]
 		} else if pattern[patPos] == '.' {
 			elemLen = 1
 			elem = "."
@@ -148,108 +125,98 @@ func matchHere(text, pattern string, textPos int) int {
 			elemLen = 1
 			elem = pattern[patPos : patPos+1]
 		}
-		
-		// Check if there's a quantifier after the element
+
+		// '+' quantifier
 		if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '+' {
-			restPattern := pattern[patPos+elemLen+1:]
-			
-			// Count how many times the element matches (greedy)
-			matchCount := 0
-			savedPos := textPos
+			rest := pattern[patPos+elemLen+1:]
+			saved := textPos
+			// consume greedily
+			count := 0
 			for textPos < len(text) && matchElement(text[textPos], elem) {
 				textPos++
-				matchCount++
+				count++
 			}
-			
-			if matchCount == 0 {
-				return -1
+			if count == 0 {
+				return -1, cap1, haveCap
 			}
-			
-			// Try matching with backtracking from max matches down to 1
-			for textPos >= savedPos+1 {
-				result := matchHere(text, restPattern, textPos)
-				if result >= 0 {
-					return result
-				}
-				textPos--
-			}
-			
-			return -1
-		} else if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '?' {
-			restPattern := pattern[patPos+elemLen+1:]
-			
-			// Try with the element matched first
-			if textPos < len(text) && matchElement(text[textPos], elem) {
-				result := matchHere(text, restPattern, textPos+1)
-				if result >= 0 {
-					return result
+			for tp := textPos; tp >= saved+1; tp-- {
+				if res, nc, nh := matchHere(text, rest, tp, cap1, haveCap); res >= 0 {
+					return res, nc, nh
 				}
 			}
-			
-			// Try without matching the element
-			result := matchHere(text, restPattern, textPos)
-			if result >= 0 {
-				return result
-			}
-			
-			return -1
-		} else if pattern[patPos] == '\\' && patPos+1 < len(pattern) {
-			ch := pattern[patPos+1]
-			if ch == 'd' {
-				if textPos >= len(text) || text[textPos] < '0' || text[textPos] > '9' {
-					return -1
-				}
-				textPos++
-				patPos += 2
-			} else if ch == 'w' {
-				if textPos >= len(text) {
-					return -1
-				}
-				b := text[textPos]
-				if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_') {
-					return -1
-				}
-				textPos++
-				patPos += 2
-			} else {
-				return -1
-			}
-		} else if pattern[patPos] == '[' {
-			end := patPos + 1
-			for end < len(pattern) && pattern[end] != ']' {
-				end++
-			}
-			if end >= len(pattern) {
-				return -1
-			}
-			
-			group := pattern[patPos+1 : end]
-			if textPos >= len(text) {
-				return -1
-			}
-			
-			if !matchCharGroup(text[textPos], group) {
-				return -1
-			}
-			
-			textPos++
-			patPos = end + 1
-		} else if pattern[patPos] == '.' {
-			if textPos >= len(text) {
-				return -1
-			}
-			textPos++
-			patPos++
-		} else {
-			if textPos >= len(text) || text[textPos] != pattern[patPos] {
-				return -1
-			}
-			textPos++
-			patPos++
+			return -1, cap1, haveCap
 		}
+		// '?' quantifier
+		if patPos+elemLen < len(pattern) && pattern[patPos+elemLen] == '?' {
+			rest := pattern[patPos+elemLen+1:]
+			// try with element
+			if textPos < len(text) && matchElement(text[textPos], elem) {
+				if res, nc, nh := matchHere(text, rest, textPos+1, cap1, haveCap); res >= 0 {
+					return res, nc, nh
+				}
+			}
+			// try without element
+			return matchHere(text, rest, textPos, cap1, haveCap)
+		}
+
+		// consume single element
+		if elem == "\\d" {
+			if textPos >= len(text) || text[textPos] < '0' || text[textPos] > '9' {
+				return -1, cap1, haveCap
+			}
+			textPos++
+			patPos += elemLen
+			continue
+		}
+		if elem == "\\w" {
+			if textPos >= len(text) {
+				return -1, cap1, haveCap
+			}
+			b := text[textPos]
+			if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_') {
+				return -1, cap1, haveCap
+			}
+			textPos++
+			patPos += elemLen
+			continue
+		}
+		if elem == "\\1" {
+			if !haveCap {
+				return -1, cap1, haveCap
+			}
+			l := len(cap1)
+			if textPos+l > len(text) || text[textPos:textPos+l] != cap1 {
+				return -1, cap1, haveCap
+			}
+			textPos += l
+			patPos += elemLen
+			continue
+		}
+		if len(elem) > 0 && elem[0] == '[' {
+			group := elem[1 : len(elem)-1]
+			if textPos >= len(text) || !matchCharGroup(text[textPos], group) {
+				return -1, cap1, haveCap
+			}
+			textPos++
+			patPos += elemLen
+			continue
+		}
+		if elem == "." {
+			if textPos >= len(text) {
+				return -1, cap1, haveCap
+			}
+			textPos++
+			patPos += elemLen
+			continue
+		}
+		// literal
+		if textPos >= len(text) || text[textPos] != elem[0] {
+			return -1, cap1, haveCap
+		}
+		textPos++
+		patPos += elemLen
 	}
-	
-	return textPos
+	return textPos, cap1, haveCap
 }
 
 func matchElement(char byte, elem string) bool {
@@ -288,21 +255,6 @@ func matchCharGroup(char byte, group string) bool {
 		}
 	}
 	return false
-}
-
-func findClosingParen(s string) int {
-	depth := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '(' {
-			depth++
-		} else if s[i] == ')' {
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
 }
 
 func findClosingParenAt(s string, start int) int {
